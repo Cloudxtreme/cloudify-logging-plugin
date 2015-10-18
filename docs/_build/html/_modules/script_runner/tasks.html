@@ -1,0 +1,364 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>script_runner.tasks &mdash; cloudify-script-plugin 1.1a5 documentation</title>
+  
+
+  
+  
+
+  
+  <link href='https://fonts.googleapis.com/css?family=Lato:400,700|Roboto+Slab:400,700|Inconsolata:400,700' rel='stylesheet' type='text/css'>
+
+  
+  
+    
+
+  
+
+  
+  
+    <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+  
+
+  
+    <link rel="top" title="cloudify-script-plugin 1.1a5 documentation" href="../../index.html"/>
+        <link rel="up" title="Module code" href="../index.html"/> 
+
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/modernizr/2.6.2/modernizr.min.js"></script>
+
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-nav-search">
+        <a href="../../index.html" class="fa fa-home"> cloudify-script-plugin</a>
+        <div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+        
+        
+            <ul class="simple">
+</ul>
+
+        
+      </div>
+      &nbsp;
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" role="navigation" aria-label="top navigation">
+        <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+        <a href="../../index.html">cloudify-script-plugin</a>
+      </nav>
+
+
+      
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../index.html">Docs</a> &raquo;</li>
+      
+          <li><a href="../index.html">Module code</a> &raquo;</li>
+      
+    <li>script_runner.tasks</li>
+      <li class="wy-breadcrumbs-aside">
+        
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main">
+            
+  <h1>Source code for script_runner.tasks</h1><div class="highlight"><pre>
+<span class="c">########</span>
+<span class="c"># Copyright (c) 2014 GigaSpaces Technologies Ltd. All rights reserved</span>
+<span class="c">#</span>
+<span class="c"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c"># you may not use this file except in compliance with the License.</span>
+<span class="c"># You may obtain a copy of the License at</span>
+<span class="c">#</span>
+<span class="c">#        http://www.apache.org/licenses/LICENSE-2.0</span>
+<span class="c">#</span>
+<span class="c"># Unless required by applicable law or agreed to in writing, software</span>
+<span class="c"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c">#    * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
+<span class="c">#    * See the License for the specific language governing permissions and</span>
+<span class="c">#    * limitations under the License.</span>
+
+
+<span class="kn">import</span> <span class="nn">socket</span>
+<span class="kn">import</span> <span class="nn">subprocess</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">threading</span>
+<span class="kn">from</span> <span class="nn">StringIO</span> <span class="kn">import</span> <span class="n">StringIO</span>
+
+<span class="kn">from</span> <span class="nn">cloudify</span> <span class="kn">import</span> <span class="n">ctx</span> <span class="k">as</span> <span class="n">operation_ctx</span>
+<span class="kn">from</span> <span class="nn">cloudify.workflows</span> <span class="kn">import</span> <span class="n">ctx</span> <span class="k">as</span> <span class="n">workflows_ctx</span>
+<span class="kn">from</span> <span class="nn">cloudify.decorators</span> <span class="kn">import</span> <span class="n">operation</span><span class="p">,</span> <span class="n">workflow</span>
+<span class="kn">from</span> <span class="nn">cloudify.exceptions</span> <span class="kn">import</span> <span class="n">NonRecoverableError</span>
+
+<span class="kn">from</span> <span class="nn">script_runner</span> <span class="kn">import</span> <span class="n">eval_env</span>
+<span class="kn">from</span> <span class="nn">script_runner.ctx_proxy</span> <span class="kn">import</span> <span class="p">(</span><span class="n">UnixCtxProxy</span><span class="p">,</span>
+                                     <span class="n">TCPCtxProxy</span><span class="p">,</span>
+                                     <span class="n">HTTPCtxProxy</span><span class="p">,</span>
+                                     <span class="n">StubCtxProxy</span><span class="p">,</span>
+                                     <span class="n">CTX_SOCKET_URL</span><span class="p">)</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">zmq</span>  <span class="c"># noqa</span>
+    <span class="n">HAS_ZMQ</span> <span class="o">=</span> <span class="bp">True</span>
+<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+    <span class="n">HAS_ZMQ</span> <span class="o">=</span> <span class="bp">False</span>
+
+<span class="n">IS_WINDOWS</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">name</span> <span class="o">==</span> <span class="s">&#39;nt&#39;</span>
+
+
+<span class="nd">@operation</span>
+<div class="viewcode-block" id="run"><a class="viewcode-back" href="../../index.html#script_runner.tasks.run">[docs]</a><span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="n">script_path</span><span class="p">,</span> <span class="n">process</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="n">ctx</span> <span class="o">=</span> <span class="n">operation_ctx</span><span class="o">.</span><span class="n">_get_current_object</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">script_path</span> <span class="ow">is</span> <span class="bp">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="n">NonRecoverableError</span><span class="p">(</span><span class="s">&#39;Script path parameter not defined&#39;</span><span class="p">)</span>
+    <span class="n">process</span> <span class="o">=</span> <span class="n">process</span> <span class="ow">or</span> <span class="p">{}</span>
+    <span class="n">script_path</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">download_resource</span><span class="p">(</span><span class="n">script_path</span><span class="p">)</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">chmod</span><span class="p">(</span><span class="n">script_path</span><span class="p">,</span> <span class="mo">0755</span><span class="p">)</span>
+    <span class="n">script_func</span> <span class="o">=</span> <span class="n">get_run_script_func</span><span class="p">(</span><span class="n">script_path</span><span class="p">,</span> <span class="n">process</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">process_execution</span><span class="p">(</span><span class="n">script_func</span><span class="p">,</span> <span class="n">script_path</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">process</span><span class="p">)</span>
+
+</div>
+<span class="nd">@workflow</span>
+<div class="viewcode-block" id="execute_workflow"><a class="viewcode-back" href="../../index.html#script_runner.tasks.execute_workflow">[docs]</a><span class="k">def</span> <span class="nf">execute_workflow</span><span class="p">(</span><span class="n">script_path</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="n">ctx</span> <span class="o">=</span> <span class="n">workflows_ctx</span><span class="o">.</span><span class="n">_get_current_object</span><span class="p">()</span>
+    <span class="n">script_path</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">internal</span><span class="o">.</span><span class="n">handler</span><span class="o">.</span><span class="n">download_blueprint_resource</span><span class="p">(</span>
+        <span class="n">script_path</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">process_execution</span><span class="p">(</span><span class="n">eval_script</span><span class="p">,</span> <span class="n">script_path</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span>
+
+</div>
+<div class="viewcode-block" id="process_execution"><a class="viewcode-back" href="../../index.html#script_runner.tasks.process_execution">[docs]</a><span class="k">def</span> <span class="nf">process_execution</span><span class="p">(</span><span class="n">script_func</span><span class="p">,</span> <span class="n">script_path</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">process</span><span class="o">=</span><span class="bp">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">returns</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">_return_value</span> <span class="o">=</span> <span class="n">value</span>
+    <span class="n">ctx</span><span class="o">.</span><span class="n">returns</span> <span class="o">=</span> <span class="n">returns</span>
+    <span class="n">ctx</span><span class="o">.</span><span class="n">_return_value</span> <span class="o">=</span> <span class="bp">None</span>
+    <span class="n">script_func</span><span class="p">(</span><span class="n">script_path</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">process</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">ctx</span><span class="o">.</span><span class="n">_return_value</span>
+
+</div>
+<div class="viewcode-block" id="get_run_script_func"><a class="viewcode-back" href="../../index.html#script_runner.tasks.get_run_script_func">[docs]</a><span class="k">def</span> <span class="nf">get_run_script_func</span><span class="p">(</span><span class="n">script_path</span><span class="p">,</span> <span class="n">process</span><span class="p">):</span>
+    <span class="n">eval_python</span> <span class="o">=</span> <span class="n">process</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s">&#39;eval_python&#39;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">eval_python</span> <span class="ow">is</span> <span class="bp">True</span> <span class="ow">or</span> <span class="p">(</span><span class="n">script_path</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s">&#39;.py&#39;</span><span class="p">)</span> <span class="ow">and</span>
+                               <span class="n">eval_python</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">False</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">eval_script</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">execute</span>
+
+</div>
+<div class="viewcode-block" id="execute"><a class="viewcode-back" href="../../index.html#script_runner.tasks.execute">[docs]</a><span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="n">script_path</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">process</span><span class="p">):</span>
+    <span class="n">on_posix</span> <span class="o">=</span> <span class="s">&#39;posix&#39;</span> <span class="ow">in</span> <span class="n">sys</span><span class="o">.</span><span class="n">builtin_module_names</span>
+
+    <span class="n">proxy</span> <span class="o">=</span> <span class="n">start_ctx_proxy</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">process</span><span class="p">)</span>
+
+    <span class="n">env</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">process_env</span> <span class="o">=</span> <span class="n">process</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s">&#39;env&#39;</span><span class="p">,</span> <span class="p">{})</span>
+    <span class="n">env</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">process_env</span><span class="p">)</span>
+    <span class="n">env</span><span class="p">[</span><span class="n">CTX_SOCKET_URL</span><span class="p">]</span> <span class="o">=</span> <span class="n">proxy</span><span class="o">.</span><span class="n">socket_url</span>
+
+    <span class="n">cwd</span> <span class="o">=</span> <span class="n">process</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s">&#39;cwd&#39;</span><span class="p">)</span>
+
+    <span class="n">command_prefix</span> <span class="o">=</span> <span class="n">process</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s">&#39;command_prefix&#39;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">command_prefix</span><span class="p">:</span>
+        <span class="n">command</span> <span class="o">=</span> <span class="s">&#39;{0} {1}&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">command_prefix</span><span class="p">,</span> <span class="n">script_path</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">command</span> <span class="o">=</span> <span class="n">script_path</span>
+
+    <span class="n">args</span> <span class="o">=</span> <span class="n">process</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s">&#39;args&#39;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">args</span><span class="p">:</span>
+        <span class="n">command</span> <span class="o">=</span> <span class="s">&#39; &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">([</span><span class="n">command</span><span class="p">]</span> <span class="o">+</span> <span class="n">args</span><span class="p">)</span>
+
+    <span class="n">ctx</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s">&#39;Executing: {0}&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">command</span><span class="p">))</span>
+
+    <span class="n">process</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">(</span><span class="n">command</span><span class="p">,</span>
+                               <span class="n">shell</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span>
+                               <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span><span class="p">,</span>
+                               <span class="n">stderr</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span><span class="p">,</span>
+                               <span class="n">env</span><span class="o">=</span><span class="n">env</span><span class="p">,</span>
+                               <span class="n">cwd</span><span class="o">=</span><span class="n">cwd</span><span class="p">,</span>
+                               <span class="n">bufsize</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                               <span class="n">close_fds</span><span class="o">=</span><span class="n">on_posix</span><span class="p">)</span>
+
+    <span class="n">return_code</span> <span class="o">=</span> <span class="bp">None</span>
+
+    <span class="n">stdout_consumer</span> <span class="o">=</span> <span class="n">OutputConsumer</span><span class="p">(</span><span class="n">process</span><span class="o">.</span><span class="n">stdout</span><span class="p">)</span>
+    <span class="n">stderr_consumer</span> <span class="o">=</span> <span class="n">OutputConsumer</span><span class="p">(</span><span class="n">process</span><span class="o">.</span><span class="n">stderr</span><span class="p">)</span>
+
+    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+        <span class="n">process_ctx_request</span><span class="p">(</span><span class="n">proxy</span><span class="p">)</span>
+        <span class="n">return_code</span> <span class="o">=</span> <span class="n">process</span><span class="o">.</span><span class="n">poll</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">return_code</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="k">break</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mf">0.1</span><span class="p">)</span>
+
+    <span class="n">proxy</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="n">stdout_consumer</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+    <span class="n">stderr_consumer</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+
+    <span class="n">ctx</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s">&#39;Execution done (return_code={0}): {1}&#39;</span>
+                    <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">return_code</span><span class="p">,</span> <span class="n">command</span><span class="p">))</span>
+
+    <span class="k">if</span> <span class="n">return_code</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="n">ProcessException</span><span class="p">(</span><span class="n">command</span><span class="p">,</span>
+                               <span class="n">return_code</span><span class="p">,</span>
+                               <span class="n">stdout_consumer</span><span class="o">.</span><span class="n">buffer</span><span class="o">.</span><span class="n">getvalue</span><span class="p">(),</span>
+                               <span class="n">stderr_consumer</span><span class="o">.</span><span class="n">buffer</span><span class="o">.</span><span class="n">getvalue</span><span class="p">())</span>
+
+</div>
+<div class="viewcode-block" id="start_ctx_proxy"><a class="viewcode-back" href="../../index.html#script_runner.tasks.start_ctx_proxy">[docs]</a><span class="k">def</span> <span class="nf">start_ctx_proxy</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">process</span><span class="p">):</span>
+    <span class="n">ctx_proxy_type</span> <span class="o">=</span> <span class="n">process</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s">&#39;ctx_proxy_type&#39;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">ctx_proxy_type</span> <span class="ow">or</span> <span class="n">ctx_proxy_type</span> <span class="o">==</span> <span class="s">&#39;auto&#39;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">HAS_ZMQ</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">IS_WINDOWS</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">TCPCtxProxy</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="n">get_unused_port</span><span class="p">())</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">UnixCtxProxy</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">HTTPCtxProxy</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="n">get_unused_port</span><span class="p">())</span>
+    <span class="k">elif</span> <span class="n">ctx_proxy_type</span> <span class="o">==</span> <span class="s">&#39;unix&#39;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">UnixCtxProxy</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">ctx_proxy_type</span> <span class="o">==</span> <span class="s">&#39;tcp&#39;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">TCPCtxProxy</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="n">get_unused_port</span><span class="p">())</span>
+    <span class="k">elif</span> <span class="n">ctx_proxy_type</span> <span class="o">==</span> <span class="s">&#39;http&#39;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">HTTPCtxProxy</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="n">get_unused_port</span><span class="p">())</span>
+    <span class="k">elif</span> <span class="n">ctx_proxy_type</span> <span class="o">==</span> <span class="s">&#39;none&#39;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">StubCtxProxy</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="n">NonRecoverableError</span><span class="p">(</span><span class="s">&#39;Unsupported proxy type: {0}&#39;</span>
+                                  <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ctx_proxy_type</span><span class="p">))</span>
+
+</div>
+<div class="viewcode-block" id="process_ctx_request"><a class="viewcode-back" href="../../index.html#script_runner.tasks.process_ctx_request">[docs]</a><span class="k">def</span> <span class="nf">process_ctx_request</span><span class="p">(</span><span class="n">proxy</span><span class="p">):</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">proxy</span><span class="p">,</span> <span class="n">StubCtxProxy</span><span class="p">):</span>
+        <span class="k">return</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">proxy</span><span class="p">,</span> <span class="n">HTTPCtxProxy</span><span class="p">):</span>
+        <span class="k">return</span>
+    <span class="n">proxy</span><span class="o">.</span><span class="n">poll_and_process</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+</div>
+<div class="viewcode-block" id="get_unused_port"><a class="viewcode-back" href="../../index.html#script_runner.tasks.get_unused_port">[docs]</a><span class="k">def</span> <span class="nf">get_unused_port</span><span class="p">():</span>
+    <span class="n">sock</span> <span class="o">=</span> <span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">()</span>
+    <span class="n">sock</span><span class="o">.</span><span class="n">bind</span><span class="p">((</span><span class="s">&#39;127.0.0.1&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">port</span> <span class="o">=</span> <span class="n">sock</span><span class="o">.</span><span class="n">getsockname</span><span class="p">()</span>
+    <span class="n">sock</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">port</span>
+
+</div>
+<div class="viewcode-block" id="eval_script"><a class="viewcode-back" href="../../index.html#script_runner.tasks.eval_script">[docs]</a><span class="k">def</span> <span class="nf">eval_script</span><span class="p">(</span><span class="n">script_path</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">process</span><span class="o">=</span><span class="bp">None</span><span class="p">):</span>
+    <span class="n">eval_globals</span> <span class="o">=</span> <span class="n">eval_env</span><span class="o">.</span><span class="n">setup_env_and_globals</span><span class="p">(</span><span class="n">script_path</span><span class="p">)</span>
+    <span class="nb">execfile</span><span class="p">(</span><span class="n">script_path</span><span class="p">,</span> <span class="n">eval_globals</span><span class="p">)</span>
+
+</div>
+<div class="viewcode-block" id="OutputConsumer"><a class="viewcode-back" href="../../index.html#script_runner.tasks.OutputConsumer">[docs]</a><span class="k">class</span> <span class="nc">OutputConsumer</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">out</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">out</span> <span class="o">=</span> <span class="n">out</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">buffer</span> <span class="o">=</span> <span class="n">StringIO</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">consumer</span> <span class="o">=</span> <span class="n">threading</span><span class="o">.</span><span class="n">Thread</span><span class="p">(</span><span class="n">target</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">consume_output</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">consumer</span><span class="o">.</span><span class="n">daemon</span> <span class="o">=</span> <span class="bp">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">consumer</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+
+<div class="viewcode-block" id="OutputConsumer.consume_output"><a class="viewcode-back" href="../../index.html#script_runner.tasks.OutputConsumer.consume_output">[docs]</a>    <span class="k">def</span> <span class="nf">consume_output</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="nb">iter</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">out</span><span class="o">.</span><span class="n">readline</span><span class="p">,</span> <span class="n">b</span><span class="s">&#39;&#39;</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">buffer</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">line</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">out</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</div>
+<div class="viewcode-block" id="OutputConsumer.join"><a class="viewcode-back" href="../../index.html#script_runner.tasks.OutputConsumer.join">[docs]</a>    <span class="k">def</span> <span class="nf">join</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">consumer</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+
+</div></div>
+<div class="viewcode-block" id="ProcessException"><a class="viewcode-back" href="../../index.html#script_runner.tasks.ProcessException">[docs]</a><span class="k">class</span> <span class="nc">ProcessException</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">command</span><span class="p">,</span> <span class="n">exit_code</span><span class="p">,</span> <span class="n">stdout</span><span class="p">,</span> <span class="n">stderr</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">ProcessException</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__init__</span><span class="p">(</span><span class="n">stderr</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">command</span> <span class="o">=</span> <span class="n">command</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">exit_code</span> <span class="o">=</span> <span class="n">exit_code</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stdout</span> <span class="o">=</span> <span class="n">stdout</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stderr</span> <span class="o">=</span> <span class="n">stderr</span></div>
+</pre></div>
+
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2014, Gigaspaces.
+    </p>
+  </div>
+
+  <a href="https://github.com/snide/sphinx_rtd_theme">Sphinx theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>
+</footer>
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  
+
+    <script type="text/javascript">
+        var DOCUMENTATION_OPTIONS = {
+            URL_ROOT:'../../',
+            VERSION:'1.1a5',
+            COLLAPSE_INDEX:false,
+            FILE_SUFFIX:'.html',
+            HAS_SOURCE:  true
+        };
+    </script>
+      <script type="text/javascript" src="../../_static/jquery.js"></script>
+      <script type="text/javascript" src="../../_static/underscore.js"></script>
+      <script type="text/javascript" src="../../_static/doctools.js"></script>
+
+  
+
+  
+  
+    <script type="text/javascript" src="../../_static/js/theme.js"></script>
+  
+
+  
+  
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.StickyNav.enable();
+      });
+  </script>
+   
+
+</body>
+</html>
