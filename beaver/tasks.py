@@ -18,29 +18,24 @@ import sys
 from ConfigParser import ConfigParser
 
 from cloudify import ctx
-# from cloudify.workflows import ctx as workflows_ctx
 from cloudify.decorators import operation
 from cloudify.exceptions import NonRecoverableError
 
-# from cloudify.proxy.client import CTX_SOCKET_URL
-# from cloudify.proxy.server import (UnixCtxProxy,
-#                                    TCPCtxProxy,
-#                                    HTTPCtxProxy,
-#                                    StubCtxProxy)
 
 """
 # cloudify.interfaces.logging:
     # configure:
         # implementation: logging.beaver.tasks.configure
         # inputs:
+            # 'beaver_config_path' allows to pass an arbitrary config file.
             # [files] to monitor
             # {output_config} for the node.
             # {beaver_config} the general bevear config set by the user.
     # start:
         # implementation: logging.beaver.tasks.start
         # inputs:
-            # 'beaver_config_path' allows to pass an arbitrary config file.
             # [additional_arguments] to pass to the cli when executing.
+            # daemonize beaver
     # stop:
         # implementation: logging.beaver.tasks.stop
     # delete:
@@ -60,17 +55,15 @@ def configure(output_config, files=None, path=None, beaver_config=None,
     :params dict beaver_config: General beaver level config.
     """
     ctx.logger.info('Generating beaver config....')
-    configurator = BeaverConfigurator(
-        output_config, files, path, beaver_config, beaver_config_file_path)
-    configurator.validate_config()
-    configurator.set_main_config()
-    configurator.set_additional_config()
-    configurator.set_output()
-    if path:
-        configurator.set_path()
-    if files:
-        configurator.set_files()
-    configurator.write_config_file()
+    if not beaver_config_file_path:
+        configurator = BeaverConfigurator(
+            output_config, files, path, beaver_config, beaver_config_file_path)
+        configurator.set_main_config()
+        configurator.set_output()
+        configurator.set_monitored_paths()
+        configurator.set_additional_config()
+        beaver_config_file_path = configurator.write_config_file()
+    ctx.instance.runtime_properties['config_file'] = beaver_config_file_path
 
 
 @operation
@@ -84,10 +77,19 @@ def start(additional_arguments=None, daemonize=True,
      to beaver's commandline.
     :params bool daemonize: whether to run the process as a daemon.
     """
-    config_path = ctx.instance.runtime_properties.get(
+    config_file = ctx.instance.runtime_properties.get(
         'beaver_config_file_path')
+    if config_file:
+        ctx.download_resource(config_file, '')
     ctx.logger.info('Starting beaver with config file: {0} and arguments: '
-                    '{1}'.format(config_path, additional_arguments))
+                    '{1}'.format(config_file, additional_arguments))
+    beaver_cmd = ['beaver', '-c', config_file]
+    if additional_arguments and not isinstance(additional_arguments, list):
+        raise NonRecoverableError(
+            '`additional_arguments` must be of type list.')
+    beaver_cmd.extend(additional_arguments)
+    if daemonize:
+        beaver_cmd.append('-d')
 
 
 @operation
@@ -108,23 +110,24 @@ class BeaverConfigurator:
     def __init__(self, output_config, files, path, beaver_config,
                  beaver_config_file_path):
         self.output_config = output_config
-        self.files = files
-        self.path = path
+        self.monitored_files = files
+        self.monitored_path = path
         self.beaver_config = beaver_config
         self.beaver_config_file_path = beaver_config_file_path
+        self._validate_config()
         self.conf = ConfigParser()
 
-    def validate_config(self):
-        if self.files:
-            if not isinstance(self.files, list):
+    def _validate_config(self):
+        if self.monitored_path:
+            if not isinstance(self.monitored_path, str):
+                raise NonRecoverableError('`path` must be of type string.')
+        if self.monitored_files:
+            if not isinstance(self.monitored_files, list):
                 raise NonRecoverableError('`files` must be of type list.')
-            if len(self.files) < 1:
+            if len(self.monitored_files) < 1:
                 raise NonRecoverableError('`files` must contain a path to at '
                                           'least one file.')
-        if self.path:
-            if not isinstance(self.path, str):
-                raise NonRecoverableError('`path` must be of type string.')
-        if not self.files and not self.path:
+        if not self.monitored_files and not self.monitored_path:
             raise NonRecoverableError(
                 'You must either supply `path` or `files` to collect from.')
 
@@ -137,37 +140,46 @@ class BeaverConfigurator:
 
     def set_main_config(self):
         self.conf.add_section('beaver')
-        self.conf.set('logstash_version', '1')
+        self._write('logstash_version', '1')
 
-    def set_files(self):
-        files = ','.join(self.files)
-        self.conf.set('beaver', 'files', files)
+    def set_monitored_paths(self):
+        if self.monitored_files:
+            files = ','.join(self.monitored_files)
+            self._write('files', files)
+        if self.monitored_path:
+            self._write('path', self.monitored_path)
 
     def set_output(self):
-        self._write_config_dict(self.output_config)
-
-    def set_path(self):
-        self.conf.set('beaver', 'path', self.path)
+        self._write_dict(self.output_config)
 
     def set_additional_config(self):
-        self._write_config_dict(self.beaver_config)
+        self._write_dict(self.beaver_config)
 
-    def _write_config_dict(self, config):
+    def _write(self, key, value):
+        self.conf.set('beaver', key, value)
+
+    def _write_dict(self, config):
         for key, value in config.items():
-            self.conf.set('beaver', key, value)
+            self._write(key, value)
 
     def write_config_file(self):
-        if IS_WINDOWS:
-            config_dir = os.path.join(sys.executable[0], 'beaver')
-        else:
-            config_dir = os.path.join('/', 'etc', 'beaver')
-        if not os.path.isdir(config_dir):
-            try:
-                os.makedirs(config_dir)
-            except OSError as ex:
-                raise NonRecoverableError(
-                    'Could not create dir {0} ({1})'.format(
-                        config_dir, str(ex)))
+        config_dir = _set_beaver_config_path()
         filepath = os.path.join(config_dir, ctx.node.id)
         with open(filepath, 'w') as f:
             self.conf.write(f)
+        return filepath
+
+
+def _set_beaver_config_path():
+    if IS_WINDOWS:
+        config_dir = os.path.join(sys.prefix, 'beaver')
+    else:
+        config_dir = os.path.join(sys.prefix, 'etc', 'beaver')
+    if not os.path.isdir(config_dir):
+        try:
+            os.makedirs(config_dir)
+        except OSError as ex:
+            raise NonRecoverableError(
+                'Could not create dir {0} ({1})'.format(
+                    config_dir, str(ex)))
+    return config_dir
