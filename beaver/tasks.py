@@ -14,8 +14,8 @@
 #    * limitations under the License.
 
 import os
-import sys
 from ConfigParser import ConfigParser
+import tempfile
 
 from cloudify import ctx
 from cloudify.decorators import operation
@@ -55,15 +55,18 @@ def configure(output_config, files=None, path=None, beaver_config=None,
     :params dict beaver_config: General beaver level config.
     """
     ctx.logger.info('Generating beaver config....')
-    if not beaver_config_file_path:
+    destination_config_path = _set_beaver_config_path(ctx.node.id)
+    if beaver_config_file_path:
+        ctx.download_resource(beaver_config_file_path, destination_config_path)
+    else:
         configurator = BeaverConfigurator(
             output_config, files, path, beaver_config, beaver_config_file_path)
         configurator.set_main_config()
         configurator.set_output()
         configurator.set_monitored_paths()
         configurator.set_additional_config()
-        beaver_config_file_path = configurator.write_config_file()
-    ctx.instance.runtime_properties['config_file'] = beaver_config_file_path
+        configurator.write_config_file(destination_config_path)
+    ctx.instance.runtime_properties['config_file'] = destination_config_path
 
 
 @operation
@@ -162,19 +165,18 @@ class BeaverConfigurator:
         for key, value in config.items():
             self._write(key, value)
 
-    def write_config_file(self):
-        config_dir = _set_beaver_config_path()
-        filepath = os.path.join(config_dir, ctx.node.id)
-        with open(filepath, 'w') as f:
+    def write_config_file(self, destination_config_path):
+        with open(destination_config_path, 'w') as f:
             self.conf.write(f)
-        return filepath
 
 
-def _set_beaver_config_path():
-    if IS_WINDOWS:
-        config_dir = os.path.join(sys.prefix, 'beaver')
+def _set_beaver_config_path(node_id):
+    if os.environ.get('CELERY_WORK_DIR'):
+        prefix = os.path.split(os.environ.get('CELERY_WORK_DIR'))[0]
+        config_dir = os.path.join(prefix, 'beaver')
     else:
-        config_dir = os.path.join(sys.prefix, 'etc', 'beaver')
+        config_dir = tempfile.mkdtemp(prefix='cloudify-monitoring-')
+
     if not os.path.isdir(config_dir):
         try:
             os.makedirs(config_dir)
@@ -182,4 +184,4 @@ def _set_beaver_config_path():
             raise NonRecoverableError(
                 'Could not create dir {0} ({1})'.format(
                     config_dir, str(ex)))
-    return config_dir
+    return os.path.join(config_dir, 'beaver-{0}.conf'.format(node_id))
